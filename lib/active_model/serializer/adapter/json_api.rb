@@ -105,6 +105,7 @@ module ActiveModel
               type: attributes.delete(:type)
             }
 
+            result[:links] = serializer.links if serializer.respond_to?(:links)
             result[:attributes] = attributes if attributes.any?
             result
           end
