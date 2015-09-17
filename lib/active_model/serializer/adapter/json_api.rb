@@ -1,158 +1,161 @@
-require 'active_model/serializer/adapter/json_api/fragment_cache'
+class ActiveModel::Serializer::Adapter::JsonApi < ActiveModel::Serializer::Adapter
+        extend ActiveSupport::Autoload
+        autoload :PaginationLinks
+        autoload :FragmentCache
 
-module ActiveModel
-  class Serializer
-    class Adapter
-      class JsonApi < Adapter
         def initialize(serializer, options = {})
           super
-          serializer.root = true
-          @hash = { data: [] }
-
-          if fields = options.delete(:fields)
+          @included = ActiveModel::Serializer::Utils.include_args_to_hash(instance_options[:include])
+          fields = options.delete(:fields)
+          if fields
             @fieldset = ActiveModel::Serializer::Fieldset.new(fields, serializer.json_key)
           else
             @fieldset = options[:fieldset]
           end
         end
 
-        def serializable_hash(options = {})
+        def serializable_hash(options = nil)
+          options ||= {}
           if serializer.respond_to?(:each)
-            serializer.each do |s|
-              result = self.class.new(s, @options.merge(fieldset: @fieldset)).serializable_hash
-              @hash[:data] << result[:data]
-
-              if result[:included]
-                @hash[:included] ||= []
-                @hash[:included] |= result[:included]
-              end
-            end
+            serializable_hash_for_collection(serializer, options)
           else
-            @hash[:data] = attributes_for_serializer(serializer, @options)
-            add_resource_relationships(@hash[:data], serializer)
+            serializable_hash_for_single_resource(serializer, options)
           end
-          @hash
         end
 
         def fragment_cache(cached_hash, non_cached_hash)
-          root = false if @options.include?(:include)
-          JsonApi::FragmentCache.new().fragment_cache(root, cached_hash, non_cached_hash)
+          root = false if instance_options.include?(:include)
+          ActiveModel::Serializer::Adapter::JsonApi::FragmentCache.new.fragment_cache(root, cached_hash, non_cached_hash)
         end
 
         private
 
-        def add_relationships(resource, name, serializers)
-          resource[:relationships] ||= {}
-          resource[:relationships][name] ||= { data: [] }
-          resource[:relationships][name][:data] += serializers.map { |serializer| { type: serializer.type, id: serializer.id.to_s } }
+        ActiveModel.silence_warnings do
+          attr_reader :included, :fieldset
         end
 
-        def add_relationship(resource, name, serializer, val=nil)
-          resource[:relationships] ||= {}
-          resource[:relationships][name] = { data: nil }
+        def serializable_hash_for_collection(serializer, options)
+          hash = { data: [] }
+          serializer.each do |s|
+            result = self.class.new(s, instance_options.merge(fieldset: fieldset)).serializable_hash(options)
+            hash[:data] << result[:data]
 
-          if serializer && serializer.object
-            resource[:relationships][name][:data] = { type: serializer.type, id: serializer.id.to_s }
-          end
-        end
-
-        def add_included(resource_name, serializers, parent = nil)
-          unless serializers.respond_to?(:each)
-            return unless serializers.object
-            serializers = Array(serializers)
-          end
-          resource_path = [parent, resource_name].compact.join('.')
-          if include_assoc?(resource_path)
-            @hash[:included] ||= []
-
-            serializers.each do |serializer|
-              attrs = attributes_for_serializer(serializer, @options)
-
-              add_resource_relationships(attrs, serializer, add_included: false)
-
-              @hash[:included].push(attrs) unless @hash[:included].include?(attrs)
+            if result[:included]
+              hash[:included] ||= []
+              hash[:included] |= result[:included]
             end
           end
 
-          serializers.each do |serializer|
-            serializer.each_association do |name, association, opts|
-              add_included(name, association, resource_path) if association
-            end if include_nested_assoc? resource_path
+          if serializer.paginated?
+            hash[:links] ||= {}
+            hash[:links].update(links_for(serializer, options))
           end
+
+          hash
         end
 
-        def attributes_for_serializer(serializer, options)
-          if serializer.respond_to?(:each)
-            result = []
-            serializer.each do |object|
-              result << resource_object_for(object, options)
-            end
+        def serializable_hash_for_single_resource(serializer, options)
+          primary_data = primary_data_for(serializer, options)
+          relationships = relationships_for(serializer)
+          included = included_for(serializer)
+          hash = { data: primary_data }
+          hash[:data][:relationships] = relationships if relationships.any?
+          hash[:included] = included if included.any?
+
+          hash
+        end
+
+        def resource_identifier_type_for(serializer)
+          if ActiveModel::Serializer.config.jsonapi_resource_type == :singular
+            serializer.object.class.model_name.singular
           else
-            result = resource_object_for(serializer, options)
+            serializer.object.class.model_name.plural
           end
-          result
         end
 
-        def resource_object_for(serializer, options)
-          options[:fields] = @fieldset && @fieldset.fields_for(serializer)
-          options[:required_fields] = [:id, :type]
+        def resource_identifier_id_for(serializer)
+          if serializer.respond_to?(:id)
+            serializer.id
+          else
+            serializer.object.id
+          end
+        end
+
+        def resource_identifier_for(serializer)
+          type = resource_identifier_type_for(serializer)
+          id   = resource_identifier_id_for(serializer)
+
+          { id: id.to_s, type: type }
+        end
+
+        def resource_object_for(serializer, options = {})
+          options[:fields] = fieldset && fieldset.fields_for(serializer)
 
           cache_check(serializer) do
-            attributes = serializer.attributes(options)
-
-            result = {
-              id: attributes.delete(:id).to_s,
-              type: attributes.delete(:type)
-            }
-
+            result = resource_identifier_for(serializer)
+            attributes = serializer.attributes(options).except(:id)
             result[:links] = serializer.links if serializer.respond_to?(:links)
             result[:attributes] = attributes if attributes.any?
             result
           end
         end
 
-        def include_assoc?(assoc)
-          return false unless @options[:include]
-          check_assoc("#{assoc}$")
-        end
-
-        def include_nested_assoc?(assoc)
-          return false unless @options[:include]
-          check_assoc("#{assoc}.")
-        end
-
-        def check_assoc(assoc)
-          include_opt = @options[:include]
-          include_opt = include_opt.split(',') if include_opt.is_a?(String)
-          include_opt.any? do |s|
-            s.match(/^#{assoc.gsub('.', '\.')}/)
+        def primary_data_for(serializer, options)
+          if serializer.respond_to?(:each)
+            serializer.map { |s| resource_object_for(s, options) }
+          else
+            resource_object_for(serializer, options)
           end
         end
 
-        def add_resource_relationships(attrs, serializer, options = {})
-          options[:add_included] = options.fetch(:add_included, true)
-
-          serializer.each_association do |name, association, opts|
-            attrs[:relationships] ||= {}
-
-            if association.respond_to?(:each)
-              add_relationships(attrs, name, association)
-            else
-              if opts[:virtual_value]
-                add_relationship(attrs, name, nil, opts[:virtual_value])
-              else
-                add_relationship(attrs, name, association)
-              end
-            end
-
-            if options[:add_included]
-              Array(association).each do |association|
-                add_included(name, association)
-              end
+        def relationship_value_for(serializer, options = {})
+          if serializer.respond_to?(:each)
+            serializer.map { |s| resource_identifier_for(s) }
+          else
+            if options[:virtual_value]
+              options[:virtual_value]
+            elsif serializer && serializer.object
+              resource_identifier_for(serializer)
             end
           end
         end
-      end
-    end
-  end
+
+        def relationships_for(serializer)
+          Hash[serializer.associations.map { |association| [association.key, { data: relationship_value_for(association.serializer, association.options) }] }]
+        end
+
+        def included_for(serializer)
+          included.flat_map { |inc|
+            association = serializer.associations.find { |assoc| assoc.key == inc.first }
+            _included_for(association.serializer, inc.second) if association
+          }.uniq
+        end
+
+        def _included_for(serializer, includes)
+          if serializer.respond_to?(:each)
+            serializer.flat_map { |s| _included_for(s, includes) }.uniq
+          else
+            return [] unless serializer && serializer.object
+
+            primary_data = primary_data_for(serializer, instance_options)
+            relationships = relationships_for(serializer)
+            primary_data[:relationships] = relationships if relationships.any?
+
+            included = [primary_data]
+
+            includes.each do |inc|
+              association = serializer.associations.find { |assoc| assoc.key == inc.first }
+              if association
+                included.concat(_included_for(association.serializer, inc.second))
+                included.uniq!
+              end
+            end
+
+            included
+          end
+        end
+
+        def links_for(serializer, options)
+          JsonApi::PaginationLinks.new(serializer.object, options[:context]).serializable_hash(options)
+        end
 end

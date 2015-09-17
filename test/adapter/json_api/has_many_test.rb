@@ -22,42 +22,45 @@ module ActiveModel
             @second_comment.post = @post
             @post.author = @author
             @post_without_comments.author = nil
-            @blog = Blog.new(id: 1, name: "My Blog!!")
+            @blog = Blog.new(id: 1, name: 'My Blog!!')
             @blog.writer = @author
             @blog.articles = [@post]
             @post.blog = @blog
             @post_without_comments.blog = nil
-
+            @tag = Tag.new(id: 1, name: '#hash_tag')
+            @post.tags = [@tag]
             @serializer = PostSerializer.new(@post)
             @adapter = ActiveModel::Serializer::Adapter::JsonApi.new(@serializer)
+
+            @virtual_value = VirtualValue.new(id: 1)
           end
 
           def test_includes_comment_ids
-            expected = { data: [ { type: "comments", id: "1" }, { type: "comments", id: "2" } ] }
+            expected = { data: [{ type: 'comments', id: '1' }, { type: 'comments', id: '2' }] }
 
             assert_equal(expected, @adapter.serializable_hash[:data][:relationships][:comments])
           end
 
           def test_includes_linked_comments
-            @adapter = ActiveModel::Serializer::Adapter::JsonApi.new(@serializer, include: 'comments')
+            @adapter = ActiveModel::Serializer::Adapter::JsonApi.new(@serializer, include: [:comments])
             expected = [{
-              id: "1",
-              type: "comments",
+              id: '1',
+              type: 'comments',
               attributes: {
                 body: 'ZOMG A COMMENT'
               },
               relationships: {
-                post: { data: { type: "posts", id: "1" } },
+                post: { data: { type: 'posts', id: '1' } },
                 author: { data: nil }
               }
             }, {
-              id: "2",
-              type: "comments",
+              id: '2',
+              type: 'comments',
               attributes: {
                 body: 'ZOMG ANOTHER COMMENT'
               },
               relationships: {
-                post: { data: { type: "posts", id: "1" } },
+                post: { data: { type: 'posts', id: '1' } },
                 author: { data: nil }
               }
             }]
@@ -65,19 +68,19 @@ module ActiveModel
           end
 
           def test_limit_fields_of_linked_comments
-            @adapter = ActiveModel::Serializer::Adapter::JsonApi.new(@serializer, include: 'comments', fields: {comment: [:id]})
+            @adapter = ActiveModel::Serializer::Adapter::JsonApi.new(@serializer, include: [:comments], fields: { comment: [:id] })
             expected = [{
-              id: "1",
-              type: "comments",
+              id: '1',
+              type: 'comments',
               relationships: {
-                post: { data: { type: "posts", id: "1" } },
+                post: { data: { type: 'posts', id: '1' } },
                 author: { data: nil }
               }
             }, {
-              id: "2",
-              type: "comments",
+              id: '2',
+              type: 'comments',
               relationships: {
-                post: { data: { type: "posts", id: "1" } },
+                post: { data: { type: 'posts', id: '1' } },
                 author: { data: nil }
               }
             }]
@@ -95,13 +98,45 @@ module ActiveModel
             serializer = BlogSerializer.new(@blog)
             adapter = ActiveModel::Serializer::Adapter::JsonApi.new(serializer)
             actual = adapter.serializable_hash[:data][:relationships][:articles]
+
             expected = {
               data: [{
-                type: "posts",
-                id: "1"
+                type: 'posts',
+                id: '1'
               }]
             }
             assert_equal expected, actual
+          end
+
+          def test_has_many_with_no_serializer
+            serializer = PostWithTagsSerializer.new(@post)
+            adapter = ActiveModel::Serializer::Adapter::JsonApi.new(serializer)
+
+            assert_equal({
+              data: {
+                id: '1',
+                type: 'posts',
+                relationships: {
+                  tags: { data: [@tag.as_json] }
+                }
+              }
+            }, adapter.serializable_hash)
+          end
+
+          def test_has_many_with_virtual_value
+            serializer = VirtualValueSerializer.new(@virtual_value)
+            adapter = ActiveModel::Serializer::Adapter::JsonApi.new(serializer)
+
+            assert_equal({
+              data: {
+                id: '1',
+                type: 'virtual_values',
+                relationships: {
+                  maker: { data: { id: 1 } },
+                  reviews: { data: [{ id: 1 }, { id: 2 }] }
+                }
+              }
+            }, adapter.serializable_hash)
           end
         end
       end

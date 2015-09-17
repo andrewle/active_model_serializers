@@ -1,31 +1,45 @@
 module ActiveModel
   class Serializer
     class ArraySerializer
+      NoSerializerError = Class.new(StandardError)
       include Enumerable
-      delegate :each, to: :@objects
+      delegate :each, to: :@serializers
 
-      attr_reader :meta, :meta_key
+      attr_reader :object, :root, :meta, :meta_key
 
-      def initialize(objects, options = {})
-        options.merge!(root: nil)
+      def initialize(resources, options = {})
+        @root = options[:root]
+        @object = resources
+        @serializers = resources.map do |resource|
+          serializer_class = options.fetch(:serializer) {
+            ActiveModel::Serializer.serializer_for(resource)
+          }
 
-        @objects = objects.map do |object|
-          serializer_class = options.fetch(
-            :serializer,
-            ActiveModel::Serializer.serializer_for(object)
-          )
-          serializer_class.new(object, options.except(:serializer))
+          if serializer_class.nil?
+            fail NoSerializerError, "No serializer found for resource: #{resource.inspect}"
+          else
+            serializer_class.new(resource, options.except(:serializer))
+          end
         end
         @meta     = options[:meta]
         @meta_key = options[:meta_key]
       end
 
       def json_key
-        @objects.first.json_key if @objects.first
+        key = root || serializers.first.try(:json_key) || object.try(:name).try(:underscore)
+        key.try(:pluralize)
       end
 
-      def root=(root)
-        @objects.first.root = root if @objects.first
+      def paginated?
+        object.respond_to?(:current_page) &&
+          object.respond_to?(:total_pages) &&
+          object.respond_to?(:size)
+      end
+
+      private # rubocop:disable Lint/UselessAccessModifier
+
+      ActiveModelSerializers.silence_warnings do
+        attr_reader :serializers
       end
     end
   end

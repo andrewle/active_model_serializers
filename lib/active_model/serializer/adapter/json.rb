@@ -1,53 +1,47 @@
-require 'active_model/serializer/adapter/json/fragment_cache'
+class ActiveModel::Serializer::Adapter::Json < ActiveModel::Serializer::Adapter
+        extend ActiveSupport::Autoload
+        autoload :FragmentCache
 
-module ActiveModel
-  class Serializer
-    class Adapter
-      class Json < Adapter
-        def serializable_hash(options = {})
+        def serializable_hash(options = nil)
+          options ||= {}
           if serializer.respond_to?(:each)
-            @result = serializer.map{|s| self.class.new(s).serializable_hash }
+            result = serializer.map { |s| FlattenJson.new(s).serializable_hash(options) }
           else
-            @hash = {}
+            hash = {}
 
-            @core = cache_check(serializer) do
+            core = cache_check(serializer) do
               serializer.attributes(options)
             end
 
-            serializer.each_association do |name, association, opts|
-              if association.respond_to?(:each)
-                array_serializer = association
-                @hash[name] = array_serializer.map do |item|
+            serializer.associations.each do |association|
+              serializer = association.serializer
+              association_options = association.options
+
+              if serializer.respond_to?(:each)
+                array_serializer = serializer
+                hash[association.key] = array_serializer.map do |item|
                   cache_check(item) do
-                    item.attributes(opts)
+                    item.attributes(association_options)
                   end
                 end
               else
-                if association && association.object
-                  @hash[name] = cache_check(association) do
-                    association.attributes(options)
+                hash[association.key] =
+                  if serializer && serializer.object
+                    cache_check(serializer) do
+                      serializer.attributes(options)
+                    end
+                  elsif association_options[:virtual_value]
+                    association_options[:virtual_value]
                   end
-                elsif opts[:virtual_value]
-                  @hash[name] = opts[:virtual_value]
-                else
-                  @hash[name] = nil
-                end
               end
             end
-            @result = @core.merge @hash
+            result = core.merge hash
           end
 
-          if root
-            @result = { root => @result }
-          else
-            @result
-          end
+          { root => result }
         end
-      end
 
-      def fragment_cache(cached_hash, non_cached_hash)
-        Json::FragmentCache.new().fragment_cache(cached_hash, non_cached_hash)
-      end
-    end
-  end
+        def fragment_cache(cached_hash, non_cached_hash)
+          ActiveModel::Serializer::Adapter::Json::FragmentCache.new().fragment_cache(cached_hash, non_cached_hash)
+        end
 end

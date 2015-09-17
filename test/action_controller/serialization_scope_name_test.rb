@@ -4,8 +4,10 @@ require 'pathname'
 class DefaultScopeNameTest < ActionController::TestCase
   class UserSerializer < ActiveModel::Serializer
     attributes :admin?
-    def admin?
-      current_user.admin
+    ActiveModelSerializers.silence_warnings do
+      def admin?
+        current_user.admin
+      end
     end
   end
 
@@ -23,7 +25,7 @@ class DefaultScopeNameTest < ActionController::TestCase
     end
   end
 
- tests UserTestController
+  tests UserTestController
 
   def test_default_scope_name
     get :render_new_user
@@ -34,8 +36,10 @@ end
 class SerializationScopeNameTest < ActionController::TestCase
   class AdminUserSerializer < ActiveModel::Serializer
     attributes :admin?
-    def admin?
-      current_admin.admin
+    ActiveModelSerializers.silence_warnings do
+      def admin?
+        current_admin.admin
+      end
     end
   end
 

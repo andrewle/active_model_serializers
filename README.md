@@ -1,14 +1,18 @@
-# ActiveModel::Serializers
+# ActiveModel::Serializer
 
-[![Build Status](https://travis-ci.org/rails-api/active_model_serializers.svg)](https://travis-ci.org/rails-api/active_model_serializers)
+[![Build Status](https://travis-ci.org/rails-api/active_model_serializers.svg?branch=master)](https://travis-ci.org/rails-api/active_model_serializers)
+<a href="https://codeclimate.com/github/rails-api/active_model_serializers"><img src="https://codeclimate.com/github/rails-api/active_model_serializers/badges/gpa.svg" /></a>
+<a href="https://codeclimate.com/github/rails-api/active_model_serializers/coverage"><img src="https://codeclimate.com/github/rails-api/active_model_serializers/badges/coverage.svg" /></a>
 
-ActiveModel::Serializers brings convention over configuration to your JSON generation.
+_Windows Build Status -_ [![Build status](https://ci.appveyor.com/api/projects/status/x6xdjydutm54gvyt/branch/master?svg=true)](https://ci.appveyor.com/project/joaomdmoura/active-model-serializers/branch/master)
+
+ActiveModel::Serializer brings convention over configuration to your JSON generation.
 
 AMS does this through two components: **serializers** and **adapters**.
 Serializers describe _which_ attributes and relationships should be serialized.
 Adapters describe _how_ attributes and relationships should be serialized.
 
-By default AMS will use the **Json Adapter**. But we strongly advise you to use JsonApi Adapter that follows 1.0 of the format specified in [jsonapi.org/format](http://jsonapi.org/format).
+By default AMS will use the **Flatten Json Adapter**. But we strongly advise you to use **JsonApi Adapter** that follows 1.0 of the format specified in [jsonapi.org/format](http://jsonapi.org/format).
 Check how to change the adapter in the sections bellow.
 
 # RELEASE CANDIDATE, PLEASE READ
@@ -23,7 +27,7 @@ architecture. We'd love your help. [Learn how you can help here.](https://github
 ## Example
 
 Given two models, a `Post(title: string, body: text)` and a
-`Comment(name:string, body:text, post_id:integer)`, you will have two
+`Comment(name: string, body: text, post_id: integer)`, you will have two
 serializers:
 
 ```ruby
@@ -32,8 +36,6 @@ class PostSerializer < ActiveModel::Serializer
   attributes :title, :body
 
   has_many :comments
-
-  url :post
 end
 ```
 
@@ -44,8 +46,6 @@ class CommentSerializer < ActiveModel::Serializer
   attributes :name, :body
 
   belongs_to :post
-
-  url [:post, :comment]
 end
 ```
 
@@ -65,6 +65,12 @@ ActiveModel::Serializer.config.adapter = :json_api
 
 You won't need to implement an adapter unless you wish to use a new format or
 media type with AMS.
+
+If you want to have a root key on your responses you should use the Json adapter, instead of the default FlattenJson:
+
+```ruby
+ActiveModel::Serializer.config.adapter = :json
+```
 
 If you would like the key in the outputted JSON to be different from its name in ActiveRecord, you can use the :key option to customize it:
 
@@ -112,7 +118,7 @@ If you wish to use a serializer other than the default, you can explicitly pass 
 render json: @posts, each_serializer: PostPreviewSerializer
 
 # Or, you can explicitly provide the collection serializer as well
-render json: @posts, serializer: PaginatedSerializer, each_serializer: PostPreviewSerializer
+render json: @posts, serializer: CollectionSerializer, each_serializer: PostPreviewSerializer
 ```
 
 ### Meta
@@ -130,16 +136,23 @@ The key can be customized using `meta_key` option.
 render json: @post, meta: { total: 10 }, meta_key: "custom_meta"
 ```
 
-`meta` will only be included in your response if there's a root. For instance,
-it won't be included in array responses.
+`meta` will only be included in your response if you are using an Adapter that supports `root`, as JsonAPI and Json adapters, the default adapter (FlattenJson) doesn't have `root`.
 
-### Root key
+### Using a serializer without `render`
 
-If you want to define a custom root for your response, specify it in the `render`
-call:
+At times, you might want to use a serializer without rendering it to the view. For those cases, you can create an instance of `ActiveModel::SerializableResource` with
+the resource you want to be serialized and call `.serializable_hash`.
 
 ```ruby
-render json: @post, root: "articles"
+def create
+  @message = current_user.messages.create!(message_params)
+  MessageCreationWorker.perform(serialized_message)
+  head 204
+end
+
+def serialized_message
+  ActiveModel::SerializableResource.new(@message).serializable_hash
+end
 ```
 
 ### Overriding association methods
@@ -176,17 +189,27 @@ end
 
 ### Built in Adapters
 
+#### FlattenJSON
+
+It's the default adapter, it generates a json response without a root key.
+Doesn't follow any specifc convention.
+
+#### JSON
+
+It also generates a json response but always with a root key. The root key **can't be overridden**, and will be automatically defined accordingly with the objects being serialized.
+Doesn't follow any specifc convention.
+
 #### JSONAPI
 
-This adapter follows RC4 of the format specified in
+This adapter follows 1.0 of the format specified in
 [jsonapi.org/format](http://jsonapi.org/format). It will include the associated
 resources in the `"included"` member when the resource names are included in the
-`include` option.
+`include` option. Including nested associated resources is also supported.
 
 ```ruby
-  render @posts, include: ['authors', 'comments']
+  render @posts, include: ['author', 'comments', 'comments.author']
   # or
-  render @posts, include: 'authors,comments'
+  render @posts, include: 'author,comments,comments.author'
 ```
 
 ## Installation
@@ -229,8 +252,6 @@ class PostSerializer < ActiveModel::Serializer
 
   has_many :comments
   has_one :author
-
-  url :post
 end
 ```
 
@@ -241,15 +262,13 @@ class CommentSerializer < ActiveModel::Serializer
   attributes :name, :body
 
   belongs_to :post_id
-
-  url [:post, :comment]
 end
 ```
 
 The attribute names are a **whitelist** of attributes to be serialized.
 
 The `has_many`, `has_one`, and `belongs_to` declarations describe relationships between
-resources. By default, when you serialize a `Post`, you will get its `Comment`s
+resources. By default, when you serialize a `Post`, you will get its `Comments`
 as well.
 
 You may also use the `:serializer` option to specify a custom serializer class, for example:
@@ -258,8 +277,17 @@ You may also use the `:serializer` option to specify a custom serializer class, 
   has_many :comments, serializer: CommentPreviewSerializer
 ```
 
-The `url` declaration describes which named routes to use while generating URLs
-for your JSON. Not every adapter will require URLs.
+And you can change the JSON key that the serializer should use for a particular association:
+
+```ruby
+  has_many :comments, key: :reviews
+```
+
+## Pagination
+
+Pagination links will be included in your response automatically as long as the resource is paginated using [Kaminari](https://github.com/amatsuda/kaminari) or [WillPaginate](https://github.com/mislav/will_paginate) and if you are using a ```JSON-API``` adapter.
+
+Although the others adapters does not have this feature, it is possible to implement pagination links to `JSON` adapter. For more information about it, please see in our docs [How to add pagination links](https://github.com/rails-api/active_model_serializers/blob/master/docs/howto/add_pagination_links.md)
 
 ## Caching
 
@@ -272,7 +300,7 @@ The cache support is optimized to use the cached object in multiple request. An 
 
 **[NOTE] Every object is individually cached.**
 
-**[NOTE] The cache is automatically expired after update an object but it's not deleted.**
+**[NOTE] The cache is automatically expired after an object is updated, but it's not deleted.**
 
 ```ruby
 cache(options = nil) # options: ```{key, expires_in, compress, force, race_condition_ttl}```
@@ -286,8 +314,6 @@ class PostSerializer < ActiveModel::Serializer
   attributes :title, :body
 
   has_many :comments
-
-  url :post
 end
 ```
 
@@ -311,8 +337,6 @@ class PostSerializer < ActiveModel::Serializer
   attributes :title, :body
 
   has_many :comments
-
-  url :post
 end
 ```
 

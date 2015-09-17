@@ -1,4 +1,5 @@
 require 'test_helper'
+require 'tempfile'
 module ActiveModel
   class Serializer
     class CacheTest < Minitest::Test
@@ -8,7 +9,7 @@ module ActiveModel
         @post           = Post.new(title: 'New Post', body: 'Body')
         @bio            = Bio.new(id: 1, content: 'AMS Contributor')
         @author         = Author.new(name: 'Joao M. D. Moura')
-        @blog           = Blog.new(id: 999, name: "Custom blog", writer: @author, articles: [])
+        @blog           = Blog.new(id: 999, name: 'Custom blog', writer: @author, articles: [])
         @role           = Role.new(name: 'Great Author')
         @location       = Location.new(lat: '-23.550520', lng: '-46.633309')
         @place          = Place.new(name: 'Amazing Place')
@@ -46,20 +47,20 @@ module ActiveModel
       end
 
       def test_cache_key_interpolation_with_updated_at
-        author = render_object_with_cache(@author)
+        render_object_with_cache(@author)
         assert_equal(nil, ActionController::Base.cache_store.fetch(@author.cache_key))
-        assert_equal(@author_serializer.attributes.to_json, ActionController::Base.cache_store.fetch("#{@author_serializer.class._cache_key}/#{@author_serializer.object.id}-#{@author_serializer.object.updated_at}").to_json)
+        assert_equal(@author_serializer.attributes.to_json, ActionController::Base.cache_store.fetch("#{@author_serializer.class._cache_key}/#{@author_serializer.object.id}-#{@author_serializer.object.updated_at.strftime("%Y%m%d%H%M%S%9N")}").to_json)
       end
 
       def test_default_cache_key_fallback
-        comment = render_object_with_cache(@comment)
+        render_object_with_cache(@comment)
         assert_equal(@comment_serializer.attributes.to_json, ActionController::Base.cache_store.fetch(@comment.cache_key).to_json)
       end
 
       def test_cache_options_definition
-        assert_equal({expires_in: 0.1, skip_digest: true}, @post_serializer.class._cache_options)
+        assert_equal({ expires_in: 0.1, skip_digest: true }, @post_serializer.class._cache_options)
         assert_equal(nil, @blog_serializer.class._cache_options)
-        assert_equal({expires_in: 1.day, skip_digest: true}, @comment_serializer.class._cache_options)
+        assert_equal({ expires_in: 1.day, skip_digest: true }, @comment_serializer.class._cache_options)
       end
 
       def test_fragment_cache_definition
@@ -72,34 +73,38 @@ module ActiveModel
         assert_equal(nil, ActionController::Base.cache_store.fetch(@post.cache_key))
         assert_equal(nil, ActionController::Base.cache_store.fetch(@comment.cache_key))
 
-        post = render_object_with_cache(@post)
+        Timecop.freeze(Time.now) do
+          render_object_with_cache(@post)
 
-        assert_equal(@post_serializer.attributes, ActionController::Base.cache_store.fetch(@post.cache_key))
-        assert_equal(@comment_serializer.attributes, ActionController::Base.cache_store.fetch(@comment.cache_key))
+          assert_equal(@post_serializer.attributes, ActionController::Base.cache_store.fetch(@post.cache_key))
+          assert_equal(@comment_serializer.attributes, ActionController::Base.cache_store.fetch(@comment.cache_key))
+        end
       end
 
       def test_associations_cache_when_updated
         # Clean the Cache
         ActionController::Base.cache_store.clear
 
-        # Generate a new Cache of Post object and each objects related to it.
-        render_object_with_cache(@post)
+        Timecop.freeze(Time.now) do
+          # Generate a new Cache of Post object and each objects related to it.
+          render_object_with_cache(@post)
 
-        # Check if if cache the objects separately
-        assert_equal(@post_serializer.attributes, ActionController::Base.cache_store.fetch(@post.cache_key))
-        assert_equal(@comment_serializer.attributes, ActionController::Base.cache_store.fetch(@comment.cache_key))
+          # Check if it cached the objects separately
+          assert_equal(@post_serializer.attributes, ActionController::Base.cache_store.fetch(@post.cache_key))
+          assert_equal(@comment_serializer.attributes, ActionController::Base.cache_store.fetch(@comment.cache_key))
 
-        # Simulating update on comments relationship with Post
-        new_comment            = Comment.new(id: 2, body: 'ZOMG A NEW COMMENT')
-        new_comment_serializer = CommentSerializer.new(new_comment)
-        @post.comments         = [new_comment]
+          # Simulating update on comments relationship with Post
+          new_comment            = Comment.new(id: 2, body: 'ZOMG A NEW COMMENT')
+          new_comment_serializer = CommentSerializer.new(new_comment)
+          @post.comments         = [new_comment]
 
-        # Ask for the serialized object
-        render_object_with_cache(@post)
+          # Ask for the serialized object
+          render_object_with_cache(@post)
 
-        # Check if the the new comment was cached
-        assert_equal(new_comment_serializer.attributes, ActionController::Base.cache_store.fetch(new_comment.cache_key))
-        assert_equal(@post_serializer.attributes, ActionController::Base.cache_store.fetch(@post.cache_key))
+          # Check if the the new comment was cached
+          assert_equal(new_comment_serializer.attributes, ActionController::Base.cache_store.fetch(new_comment.cache_key))
+          assert_equal(@post_serializer.attributes, ActionController::Base.cache_store.fetch(@post.cache_key))
+        end
       end
 
       def test_fragment_fetch_with_virtual_associations
@@ -113,24 +118,46 @@ module ActiveModel
         hash = render_object_with_cache(@location)
 
         assert_equal(hash, expected_result)
-        assert_equal({place: 'Nowhere'}, ActionController::Base.cache_store.fetch(@location.cache_key))
+        assert_equal({ place: 'Nowhere' }, ActionController::Base.cache_store.fetch(@location.cache_key))
       end
 
-      def test_uses_file_digest_in_cahe_key
-        blog = render_object_with_cache(@blog)
+      def test_uses_file_digest_in_cache_key
+        render_object_with_cache(@blog)
         assert_equal(@blog_serializer.attributes, ActionController::Base.cache_store.fetch(@blog.cache_key_with_digest))
       end
 
-      def _cache_digest_definition
+      def test_cache_digest_definition
         assert_equal(::Model::FILE_DIGEST, @post_serializer.class._cache_digest)
       end
 
+      def test_serializer_file_path_on_nix
+        path = '/Users/git/emberjs/ember-crm-backend/app/serializers/lead_serializer.rb'
+        caller_line = "#{path}:1:in `<top (required)>'"
+        assert_equal caller_line[ActiveModel::Serializer::CALLER_FILE], path
+      end
+
+      def test_serializer_file_path_on_windows
+        path = 'c:/git/emberjs/ember-crm-backend/app/serializers/lead_serializer.rb'
+        caller_line = "#{path}:1:in `<top (required)>'"
+        assert_equal caller_line[ActiveModel::Serializer::CALLER_FILE], path
+      end
+
+      def test_digest_caller_file
+        contents = "puts 'AMS rocks'!"
+        file = Tempfile.new('some_ruby.rb')
+        file.write(contents)
+        path = file.path
+        caller_line = "#{path}:1:in `<top (required)>'"
+        file.close
+        assert_equal ActiveModel::Serializer.digest_caller_file(caller_line), Digest::MD5.hexdigest(contents)
+      ensure
+        file.unlink
+      end
+
       private
+
       def render_object_with_cache(obj)
-        serializer_class = ActiveModel::Serializer.serializer_for(obj)
-        serializer = serializer_class.new(obj)
-        adapter = ActiveModel::Serializer.adapter.new(serializer)
-        adapter.serializable_hash
+        ActiveModel::SerializableResource.new(obj).serializable_hash
       end
     end
   end

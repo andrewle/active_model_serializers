@@ -19,40 +19,60 @@ module ActiveModel
             @comment.author = nil
             @post.author = @author
             @anonymous_post.author = nil
-            @blog = Blog.new(id: 1, name: "My Blog!!")
+            @blog = Blog.new(id: 1, name: 'My Blog!!')
             @blog.writer = @author
             @blog.articles = [@post, @anonymous_post]
             @author.posts = []
             @author.roles = []
 
+            @virtual_value = VirtualValue.new(id: 1)
+
             @serializer = AuthorSerializer.new(@author)
-            @adapter = ActiveModel::Serializer::Adapter::JsonApi.new(@serializer, include: 'bio,posts')
+            @adapter = ActiveModel::Serializer::Adapter::JsonApi.new(@serializer, include: [:bio, :posts])
           end
 
           def test_includes_bio_id
-            expected = { data: { type: "bios", id: "43" } }
+            expected = { data: { type: 'bios', id: '43' } }
 
             assert_equal(expected, @adapter.serializable_hash[:data][:relationships][:bio])
           end
 
           def test_includes_linked_bio
-            @adapter = ActiveModel::Serializer::Adapter::JsonApi.new(@serializer, include: 'bio')
+            @adapter = ActiveModel::Serializer::Adapter::JsonApi.new(@serializer, include: [:bio])
 
             expected = [
               {
-                id: "43",
-                type: "bios",
+                id: '43',
+                type: 'bios',
                 attributes: {
-                  content:"AMS Contributor",
+                  content: 'AMS Contributor',
                   rating: nil
                 },
                 relationships: {
-                  author: { data: { type: "authors", id: "1" } }
+                  author: { data: { type: 'authors', id: '1' } }
                 }
               }
             ]
 
             assert_equal(expected, @adapter.serializable_hash[:included])
+          end
+
+          def test_has_one_with_virtual_value
+            serializer = VirtualValueSerializer.new(@virtual_value)
+            adapter = ActiveModel::Serializer::Adapter::JsonApi.new(serializer)
+
+            expected = {
+              data: {
+                id: '1',
+                type: 'virtual_values',
+                relationships: {
+                  maker: { data: { id: 1 } },
+                  reviews: { data: [{ id: 1 }, { id: 2 }] }
+                }
+              }
+            }
+
+            assert_equal(expected, adapter.serializable_hash)
           end
         end
       end
